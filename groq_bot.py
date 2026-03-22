@@ -28,7 +28,7 @@ def responseAnimation(response):
 def startChatBot(course_id : str):
     assignments_due = canvas_student.getAssignmentInfo(course_id)
 
-    response = client.chat.completions.create(
+    stream = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
             {"role": "user", 
@@ -37,10 +37,9 @@ def startChatBot(course_id : str):
         ], stream=True
     )
 
-    return responseAnimation(response)
+    return stream
 
-
-startChatBot("55069")
+#startChatBot("55069")
 
 
 #Speed of groqs output

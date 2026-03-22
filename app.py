@@ -1,272 +1,528 @@
 import flet as ft
+import threading
+import time
 import sys
-sys.path.append(".")  # makes sure Python finds your files
-import canvas_student
-from groq_bot import startChatBot
+import os
 
+# ── make sure sibling files are importable ────────────────────────────────────
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import canvas_student
+import groq_bot
+
+# ── palette ──────────────────────────────────────────────────────────────────
+BG        = "#080c10"
+SURFACE   = "#0d1117"
+CARD      = "#111720"
+BORDER    = "#1e2d3d"
+RED       = "#e8413e"
+RED_DIM   = "#9b1c1a"
+RED_GLOW  = "#ff6b68"
+TEXT      = "#e8edf2"
+MUTED     = "#5a7080"
+ACCENT    = "#ff6b68"
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+def clean_html(raw: str) -> str:
+    import re
+    if not raw:
+        return "Sin descripción."
+    return re.sub(r"<[^>]+>", "", raw).strip() or "Sin descripción."
+
+# ── components ────────────────────────────────────────────────────────────────
+def logo_bug() -> ft.Container:
+    """The little bug mascot (pure Flet shapes)."""
+    return ft.Container(
+        content=ft.Stack(
+            controls=[
+                # body
+                ft.Container(
+                    width=48, height=48,
+                    border_radius=24,
+                    bgcolor=RED,
+                    left=8, top=8,
+                ),
+                # eyes
+                ft.Container(width=10, height=10, border_radius=5,
+                             bgcolor="#1a0a0a", left=14, top=20),
+                ft.Container(width=10, height=10, border_radius=5,
+                             bgcolor="#1a0a0a", left=40, top=20),
+                # legs
+                ft.Container(width=3, height=14, border_radius=2,
+                             bgcolor=RED_DIM, left=4, top=38,
+                             rotate=ft.Rotate(-0.4)),
+                ft.Container(width=3, height=14, border_radius=2,
+                             bgcolor=RED_DIM, left=57, top=38,
+                             rotate=ft.Rotate(0.4)),
+                ft.Container(width=3, height=18, border_radius=2,
+                             bgcolor=RED_DIM, left=0, top=26,
+                             rotate=ft.Rotate(-0.6)),
+                ft.Container(width=3, height=18, border_radius=2,
+                             bgcolor=RED_DIM, left=61, top=26,
+                             rotate=ft.Rotate(0.6)),
+            ],
+            width=64,
+            height=64,
+        ),
+    )
+
+
+def pill_badge(text: str) -> ft.Container:
+    return ft.Container(
+        content=ft.Row(
+            controls=[
+                ft.Container(
+                    content=ft.Text("NEW", size=9, weight=ft.FontWeight.W_900,
+                                   color=BG),
+                    bgcolor=RED,
+                    border_radius=4,
+                    padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                ),
+                ft.Text(text, size=12, color=MUTED),
+                ft.Icon(ft.Icons.ARROW_FORWARD, size=12, color=MUTED),
+            ],
+            spacing=8,
+            tight=True,
+        ),
+        border=ft.border.all(1, BORDER),
+        border_radius=20,
+        padding=ft.padding.symmetric(horizontal=12, vertical=6),
+        bgcolor="#0a1018",
+    )
+
+
+def assignment_card(name: str, desc: str) -> ft.Container:
+    return ft.Container(
+        content=ft.Column(
+            controls=[
+                ft.Row(
+                    controls=[
+                        ft.Container(width=6, height=6, border_radius=3,
+                                     bgcolor=RED),
+                        ft.Text(name, size=13, weight=ft.FontWeight.W_700,
+                                color=TEXT, expand=True),
+                    ],
+                    spacing=8,
+                ),
+                ft.Text(clean_html(desc), size=11, color=MUTED,
+                        max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
+            ],
+            spacing=6,
+        ),
+        bgcolor=CARD,
+        border=ft.border.all(1, BORDER),
+        border_radius=10,
+        padding=14,
+    )
+
+
+def typing_dots() -> ft.Row:
+    return ft.Row(
+        controls=[
+            ft.Container(
+                width=7, height=7, border_radius=4,
+                bgcolor=RED,
+                animate=ft.Animation(600, "easeInOut"),
+            )
+            for _ in range(3)
+        ],
+        spacing=5,
+    )
+
+# ── main app ──────────────────────────────────────────────────────────────────
 def main(page: ft.Page):
     page.title = "CanvasBot"
-    page.bgcolor = "#080d12"
+    page.bgcolor = BG
     page.padding = 0
-    page.scroll = ft.ScrollMode.AUTO
     page.fonts = {
-        "Mono": "https://fonts.gstatic.com/s/spacemono/v13/i7dPIFZifjKcF5UAWdDRYEF8RQ.woff2"
+        "Syne": "https://fonts.gstatic.com/s/syne/v22/8vIS7w4qzmVxsWxjBZRjr0FKM_04uQ.woff2",
+        "DM Mono": "https://fonts.gstatic.com/s/dmmono/v14/aFTU7PB1QTsUX8KYth-QAa6JYKkJ.woff2",
     }
+    page.theme = ft.Theme(font_family="DM Mono")
+    page.window.width  = 420
+    page.window.height = 820
+    page.window.resizable = True
 
-    # ── Glow helper ───────────────────────────────────────────────────────────
-    def glowing(content, color="#4a9eff", radius=14, blur=24):
+    # ── state ─────────────────────────────────────────────────────────────────
+    assignments: dict = {}
+    current_course_id = {"v": ""}
+    chat_messages: list[ft.Control] = []
+
+    # ── refs ──────────────────────────────────────────────────────────────────
+    course_input   = ft.Ref[ft.TextField]()
+    chat_column    = ft.Ref[ft.Column]()
+    assignments_col= ft.Ref[ft.Column]()
+    status_text    = ft.Ref[ft.Text]()
+    load_btn       = ft.Ref[ft.IconButton]()
+
+    # ── chat helpers ──────────────────────────────────────────────────────────
+    def bubble(text: str, is_bot: bool) -> ft.Container:
         return ft.Container(
-            content=content,
-            border_radius=radius,
-            shadow=[
-                ft.BoxShadow(blur_radius=blur,     spread_radius=1, color=f"{color}66", offset=ft.Offset(0, 0)),
-                ft.BoxShadow(blur_radius=blur * 2, spread_radius=2, color=f"{color}33", offset=ft.Offset(0, 0)),
-                ft.BoxShadow(blur_radius=blur * 3, spread_radius=3, color=f"{color}11", offset=ft.Offset(0, 0)),
-            ],
+            content=ft.Text(text, size=12, color=TEXT, selectable=True),
+            bgcolor=RED if not is_bot else CARD,
+            border=ft.border.all(1, BORDER if is_bot else "transparent"),
+            border_radius=ft.border_radius.only(
+                top_left=12, top_right=12,
+                bottom_left=0 if is_bot else 12,
+                bottom_right=12 if is_bot else 0,
+            ),
+            padding=12,
+            margin=ft.margin.only(
+                left=0 if is_bot else 50,
+                right=50 if is_bot else 0,
+                bottom=6,
+            ),
         )
 
-    # ── State ─────────────────────────────────────────────────────────────────
-    assignments_list = ft.Row(wrap=True, spacing=16, run_spacing=16)
+    def add_bubble(text: str, is_bot: bool):
+        chat_column.current.controls.append(bubble(text, is_bot))
+        page.update()
 
-    # ── Handlers ──────────────────────────────────────────────────────────────
-    def on_search(e):
-        code = course_input.value.strip()
-        if not code:
+    # ── load assignments ──────────────────────────────────────────────────────
+    def load_assignments(e):
+        cid = course_input.current.value.strip()
+        if not cid:
+            status_text.current.value = "⚠  Ingresa un Course ID"
+            status_text.current.color = RED
+            page.update()
             return
 
-        assignments_list.controls.clear()
-        results_section.visible = True
+        load_btn.current.disabled = True
+        status_text.current.value = "Conectando con Canvas…"
+        status_text.current.color = MUTED
+        page.update()
+        current_course_id["v"] = cid
 
-        assignments = startChatBot(code)
+        def _fetch():
+            nonlocal assignments
+            try:
+                assignments = canvas_student.getAssignmentInfo(cid)
+                assignments_col.current.controls.clear()
+                for name, desc in assignments.items():
+                    assignments_col.current.controls.append(
+                        assignment_card(name, desc)
+                    )
+                status_text.current.value = f"✓  {len(assignments)} tareas pendientes"
+                status_text.current.color = "#4caf87"
+            except Exception as ex:
+                status_text.current.value = f"Error: {ex}"
+                status_text.current.color = RED
+            finally:
+                load_btn.current.disabled = False
+                page.update()
 
-        for a in assignments:
-            due = a["due_at"][:10]
-            pts = a.get("points_possible")
-            pts_str = f"{int(pts)} pts" if pts else "ungraded"
+        threading.Thread(target=_fetch, daemon=True).start()
 
-            card = ft.Container(
-                content=ft.Column(
-                    [
-                        ft.Container(
-                            content=ft.Text("DUE", size=10, color="#4a9eff", weight="bold", font_family="Mono"),
-                            bgcolor="#0d1f35",
-                            border_radius=4,
-                            padding=ft.padding.symmetric(horizontal=8, vertical=3),
-                        ),
-                        ft.Text(a["name"], size=15, weight="bold", color="#ffffff"),
-                        ft.Text(f"📅 {due}", size=12, color="#556677"),
-                        ft.Text(f"⭐ {pts_str}", size=12, color="#556677"),
-                    ],
-                    spacing=8,
+    # ── ask AI ────────────────────────────────────────────────────────────────
+    def ask_ai(e):
+        if not assignments:
+            add_bubble("⚠  Primero carga un curso.", True)
+            return
+
+        add_bubble("Analiza mis tareas y dame un resumen.", False)
+
+        def _run():
+            # show typing dots while connecting
+            dots = ft.Container(
+                content=ft.Row(
+                    [ft.Container(width=6, height=6, border_radius=3, bgcolor=RED)
+                     for _ in range(3)],
+                    spacing=4,
                 ),
-                width=220,
-                bgcolor="#0e1520",
-                border_radius=14,
-                padding=20,
-                border=ft.border.all(1, "#1a3050"),
-                shadow=[
-                    ft.BoxShadow(blur_radius=16, spread_radius=1, color="#4a9eff22", offset=ft.Offset(0, 0)),
-                    ft.BoxShadow(blur_radius=32, spread_radius=2, color="#4a9eff11", offset=ft.Offset(0, 0)),
-                ],
+                padding=12,
+                bgcolor=CARD,
+                border_radius=10,
+                margin=ft.margin.only(right=50, bottom=6),
             )
-            assignments_list.controls.append(card)
+            chat_column.current.controls.append(dots)
+            page.update()
 
-        section_label.value = f"Assignments for  {code}"
-        page.update()
+            try:
+                stream = groq_bot.startChatBot(current_course_id["v"])
 
-    def on_clear(e):
-        course_input.value = ""
-        assignments_list.controls.clear()
-        results_section.visible = False
-        page.update()
+                # remove dots and create a live streaming bubble
+                chat_column.current.controls.remove(dots)
+                live_text = ft.Text("", size=12, color=TEXT, selectable=True)
+                live_bubble = ft.Container(
+                    content=live_text,
+                    bgcolor=CARD,
+                    border=ft.border.all(1, BORDER),
+                    border_radius=ft.border_radius.only(
+                        top_left=12, top_right=12,
+                        bottom_left=0, bottom_right=12,
+                    ),
+                    padding=12,
+                    margin=ft.margin.only(right=50, bottom=6),
+                )
+                chat_column.current.controls.append(live_bubble)
+                page.update()
 
-    # ── Bot mascot ────────────────────────────────────────────────────────────
-    bot_inner = ft.Column(
-        [
-            ft.Row(
-                [ft.Container(width=3, height=14, bgcolor="#4a9eff", border_radius=2)],
-                alignment=ft.MainAxisAlignment.CENTER,
-            ),
-            ft.Row(
-                [ft.Container(width=10, height=10, bgcolor="#4a9eff", border_radius=5)],
-                alignment=ft.MainAxisAlignment.CENTER,
-            ),
+                # stream chunks into the bubble in real-time
+                full_text = ""
+                for chunk in stream:
+                    content = chunk.choices[0].delta.content
+                    if content:
+                        full_text += content
+                        live_text.value = full_text
+                        page.update()
+
+            except Exception as ex:
+                chat_column.current.controls.remove(dots) if dots in chat_column.current.controls else None
+                add_bubble(f"❌ Error al conectar con Groq: {ex}", True)
+
+        threading.Thread(target=_run, daemon=True).start()
+
+    # ── chat input ────────────────────────────────────────────────────────────
+    chat_input = ft.TextField(
+        hint_text="Pregúntame algo sobre tus tareas…",
+        hint_style=ft.TextStyle(color=MUTED, size=12),
+        text_style=ft.TextStyle(color=TEXT, size=12, font_family="DM Mono"),
+        border=ft.InputBorder.NONE,
+        expand=True,
+        bgcolor="transparent",
+        cursor_color=RED,
+        on_submit=lambda e: _send_custom(e),
+    )
+
+    def _send_custom(e):
+        msg = chat_input.value.strip()
+        if not msg:
+            return
+        chat_input.value = ""
+        add_bubble(msg, False)
+
+        def _reply():
+            time.sleep(0.8)
+            add_bubble(
+                "Aún estoy aprendiendo a responder eso 🤖. "
+                "Por ahora usa el botón de resumen para analizar tus tareas.",
+                True,
+            )
+
+        threading.Thread(target=_reply, daemon=True).start()
+
+    # ── HEADER ────────────────────────────────────────────────────────────────
+    header = ft.Container(
+        content=ft.Column(
+            controls=[
+                logo_bug(),
+                ft.Text("CanvasBot", size=32, weight=ft.FontWeight.W_900,
+                        color=TEXT, font_family="Syne"),
+                ft.Text("THE AI THAT ACTUALLY DOES HOMEWORK.",
+                        size=10, weight=ft.FontWeight.W_700,
+                        color=RED,
+                        style=ft.TextStyle(letter_spacing=2)),
+                ft.Text("Analiza tus tareas en Canvas, genera resúmenes\n"
+                        "y responde tus dudas con IA.",
+                        size=12, color=MUTED, text_align=ft.TextAlign.CENTER),
+                pill_badge("Powered by Groq · llama-3.3-70b"),
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=10,
+        ),
+        padding=ft.padding.symmetric(vertical=32, horizontal=20),
+        alignment=ft.Alignment(0, 0),
+        gradient=ft.LinearGradient(
+            begin=ft.Alignment(0, -1),
+            end=ft.Alignment(0, 1),
+            colors=[SURFACE, BG],
+        ),
+    )
+
+    # ── COURSE PANEL ──────────────────────────────────────────────────────────
+    course_panel = ft.Container(
+        content=ft.Column(
+            controls=[
+                ft.Text("CURSO", size=10, weight=ft.FontWeight.W_900,
+                        color=MUTED, style=ft.TextStyle(letter_spacing=3)),
+                ft.Container(
+                    content=ft.Row(
+                        controls=[
+                            ft.TextField(
+                                ref=course_input,
+                                hint_text="Course ID  (ej. 55069)",
+                                hint_style=ft.TextStyle(color=MUTED, size=12),
+                                text_style=ft.TextStyle(color=TEXT, size=13,
+                                                        font_family="DM Mono"),
+                                border=ft.InputBorder.NONE,
+                                expand=True,
+                                bgcolor="transparent",
+                                cursor_color=RED,
+                                on_submit=load_assignments,
+                            ),
+                            ft.IconButton(
+                                ref=load_btn,
+                                icon=ft.Icons.DOWNLOAD_ROUNDED,
+                                icon_color=RED,
+                                icon_size=20,
+                                tooltip="Cargar tareas",
+                                on_click=load_assignments,
+                            ),
+                        ],
+                    ),
+                    bgcolor=CARD,
+                    border=ft.border.all(1, BORDER),
+                    border_radius=10,
+                    padding=ft.padding.only(left=14, right=4, top=4, bottom=4),
+                ),
+                ft.Text(ref=status_text, value="", size=11, color=MUTED),
+            ],
+            spacing=8,
+        ),
+        padding=ft.padding.symmetric(horizontal=20, vertical=10),
+    )
+
+    # ── TABS ──────────────────────────────────────────────────────────────────
+    selected_tab = {"v": 0}
+
+    tab_assignments_view = ft.Column(
+        ref=assignments_col,
+        controls=[
+            ft.Container(
+                content=ft.Text("Carga un curso para ver las tareas.",
+                                size=12, color=MUTED,
+                                text_align=ft.TextAlign.CENTER),
+                alignment=ft.Alignment(0, 0),
+                padding=30,
+            )
+        ],
+        spacing=8,
+        scroll=ft.ScrollMode.AUTO,
+    )
+
+    tab_chat_view = ft.Column(
+        controls=[
             ft.Container(
                 content=ft.Column(
-                    [
-                        ft.Row(
-                            [
-                                ft.Container(
-                                    content=ft.Container(width=5, height=5, bgcolor="#4a9eff", border_radius=3),
-                                    width=16, height=16, bgcolor="#080d12", border_radius=8,
-                                    alignment=ft.alignment.Alignment(0, 0),
-                                ),
-                                ft.Container(
-                                    content=ft.Container(width=5, height=5, bgcolor="#4a9eff", border_radius=3),
-                                    width=16, height=16, bgcolor="#080d12", border_radius=8,
-                                    alignment=ft.alignment.Alignment(0, 0),
-                                ),
-                            ],
-                            alignment=ft.MainAxisAlignment.CENTER,
-                            spacing=14,
-                        ),
-                        ft.Row(
-                            [ft.Container(width=24, height=4, bgcolor="#080d12", border_radius=2)],
-                            alignment=ft.MainAxisAlignment.CENTER,
-                        ),
+                    ref=chat_column,
+                    controls=[
+                        ft.Container(
+                            content=ft.Text(
+                                "Hola 👋  Carga un curso y presiona\n"
+                                "\"Resumir\" para analizar tus tareas.",
+                                size=12, color=MUTED,
+                                text_align=ft.TextAlign.CENTER,
+                            ),
+                            alignment=ft.Alignment(0, 0),
+                            padding=20,
+                        )
                     ],
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    spacing=8,
+                    spacing=4,
+                    scroll=ft.ScrollMode.AUTO,
                 ),
-                width=72,
-                height=60,
-                bgcolor="#2a6fd6",
-                border_radius=ft.border_radius.only(top_left=16, top_right=16, bottom_left=8, bottom_right=8),
+                expand=True,
+                height=340,
             ),
+            ft.Divider(height=1, color=BORDER),
             ft.Container(
                 content=ft.Row(
-                    [
-                        ft.Container(width=12, height=20, bgcolor="#2a6fd6", border_radius=4),
-                        ft.Container(
-                            content=ft.Row(
-                                [
-                                    ft.Container(width=8, height=8, bgcolor="#4a9eff", border_radius=4),
-                                    ft.Container(width=8, height=8, bgcolor="#1a4fa0", border_radius=4),
-                                ],
-                                spacing=4,
-                                alignment=ft.MainAxisAlignment.CENTER,
-                            ),
-                            width=40, height=30, bgcolor="#1a4fa0", border_radius=6,
+                    controls=[
+                        chat_input,
+                        ft.IconButton(
+                            icon=ft.Icons.AUTO_AWESOME_ROUNDED,
+                            icon_color=RED,
+                            icon_size=18,
+                            tooltip="Resumir tareas",
+                            on_click=ask_ai,
                         ),
-                        ft.Container(width=12, height=20, bgcolor="#2a6fd6", border_radius=4),
+                        ft.IconButton(
+                            icon=ft.Icons.SEND_ROUNDED,
+                            icon_color=MUTED,
+                            icon_size=18,
+                            tooltip="Enviar",
+                            on_click=_send_custom,
+                        ),
                     ],
-                    alignment=ft.MainAxisAlignment.CENTER,
-                    spacing=3,
                 ),
-                width=72,
-                height=36,
-            ),
-            ft.Row(
-                [
-                    ft.Container(width=14, height=16, bgcolor="#2a6fd6",
-                                 border_radius=ft.border_radius.only(bottom_left=6, bottom_right=6)),
-                    ft.Container(width=14, height=16, bgcolor="#2a6fd6",
-                                 border_radius=ft.border_radius.only(bottom_left=6, bottom_right=6)),
-                ],
-                alignment=ft.MainAxisAlignment.CENTER,
-                spacing=20,
+                bgcolor=CARD,
+                border=ft.border.all(1, BORDER),
+                border_radius=10,
+                padding=ft.padding.symmetric(horizontal=10, vertical=4),
+                margin=ft.margin.only(top=8),
             ),
         ],
-        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
         spacing=0,
     )
 
-    # Wrap bot in glow
-    bot = ft.Container(
-        content=bot_inner,
-        shadow=[
-            ft.BoxShadow(blur_radius=40, spread_radius=0, color="#1a6fffaa", offset=ft.Offset(0, 0)),
-            ft.BoxShadow(blur_radius=80, spread_radius=0, color="#1a6fff44", offset=ft.Offset(0, 0)),
-            ft.BoxShadow(blur_radius=120, spread_radius=0, color="#1a6fff22", offset=ft.Offset(0, 0)),
-        ],
-    )
+    tab_bar_items = ["Tareas", "Chat IA"]
+    tab_indicators = []
+    tab_labels     = []
 
-    # ── Input ─────────────────────────────────────────────────────────────────
-    course_input = ft.TextField(
-    hint_text="Enter course code  e.g. P2026_ESI3119C",
-    hint_style=ft.TextStyle(color="#2a3545"),
-    text_style=ft.TextStyle(color="#ffffff", size=13, font_family="Mono"),  # make sure white
-    bgcolor="#0e1520",
-    border_color="#1a2535",
-    focused_border_color="#4a9eff",
-    border_radius=10,
-    height=52,
-    expand=True,
-    on_submit=on_search,
-    cursor_color="#4a9eff",
-    color="#ffffff",  )
+    def switch_tab(idx: int):
+        selected_tab["v"] = idx
+        for i, (ind, lbl) in enumerate(zip(tab_indicators, tab_labels)):
+            ind.bgcolor = RED if i == idx else "transparent"
+            lbl.color   = TEXT if i == idx else MUTED
+        switcher.content = [tab_assignments_view, tab_chat_view][idx]
+        page.update()
 
-    search_btn = ft.ElevatedButton(
-        "FETCH →",
-        on_click=on_search,
-        bgcolor="#4a9eff",
-        color="#080d12",
-        style=ft.ButtonStyle(
-            shape=ft.RoundedRectangleBorder(radius=10),
-            text_style=ft.TextStyle(weight="bold", size=12, font_family="Mono"),
-            shadow_color="#4a9eff",
-            elevation=12,
-        ),
-        height=52,
-        width=100,
-    )
+    for idx, label in enumerate(tab_bar_items):
+        ind = ft.Container(height=2, border_radius=1,
+                           bgcolor=RED if idx == 0 else "transparent",
+                           animate=ft.Animation(200, "ease"))
+        lbl = ft.Text(label, size=12, weight=ft.FontWeight.W_700,
+                      color=TEXT if idx == 0 else MUTED,
+                      animate_opacity=ft.Animation(200, "ease"))
+        tab_indicators.append(ind)
+        tab_labels.append(lbl)
 
-    section_label = ft.Text("", size=13, color="#555", font_family="Mono")
-
-    results_section = ft.Column(
-        [
-            ft.Row(
-                [
-                    ft.Row([
-                        ft.Text("›", size=20, color="#4a9eff", weight="bold"),
-                        section_label,
-                    ], spacing=6),
-                    ft.TextButton("clear", on_click=on_clear,
-                                  style=ft.ButtonStyle(color="#2a3545")),
-                ],
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            ),
-            assignments_list,
-        ],
-        visible=False,
-        spacing=16,
-    )
-
-    # ── Layout ────────────────────────────────────────────────────────────────
-    page.add(
-        ft.Container(
+    def _make_tab_btn(idx):
+        return ft.GestureDetector(
             content=ft.Column(
-                [
-                    ft.Container(height=40),
-                    ft.Row([bot], alignment=ft.MainAxisAlignment.CENTER),
-                    ft.Container(height=20),
-                    ft.Row(
-                        [
-                            ft.Text("Canvas", size=40, weight="bold", color="#ffffff"),
-                            ft.Text("Bot", size=40, weight="bold", color="#4a9eff",
-                                    spans=[ft.TextSpan(style=ft.TextStyle(shadow=[
-                                        ft.BoxShadow(blur_radius=20, color="#4a9eff99", offset=ft.Offset(0, 0)),
-                                        ft.BoxShadow(blur_radius=40, color="#4a9eff44", offset=ft.Offset(0, 0)),
-                                    ]))]),
-                        ],
-                        alignment=ft.MainAxisAlignment.CENTER,
-                        spacing=0,
-                    ),
-                    ft.Row(
-                        [ft.Text("YOUR ASSIGNMENTS. FETCHED INSTANTLY.", size=11,
-                                 color="#4a9eff", weight="bold", font_family="Mono")],
-                        alignment=ft.MainAxisAlignment.CENTER,
-                    ),
-                    ft.Container(height=8),
-                    ft.Row(
-                        [ft.Text("Enter your Canvas course code and get all upcoming assignments.",
-                                 size=13, color="#334455", text_align=ft.TextAlign.CENTER)],
-                        alignment=ft.MainAxisAlignment.CENTER,
-                    ),
-                    ft.Container(height=32),
-                    ft.Row([course_input, search_btn], spacing=10),
-                    ft.Container(height=32),
-                    ft.Divider(color="#0e1520", height=1),
-                    ft.Container(height=24),
-                    results_section,
-                ],
-                spacing=6,
+                controls=[tab_labels[idx], tab_indicators[idx]],
+                spacing=4,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            padding=ft.padding.symmetric(horizontal=48, vertical=0),
+            on_tap=lambda e, i=idx: switch_tab(i),
+        )
+
+    tab_bar = ft.Container(
+        content=ft.Row(
+            controls=[_make_tab_btn(i) for i in range(len(tab_bar_items))],
+            spacing=24,
+        ),
+        padding=ft.padding.symmetric(horizontal=20, vertical=8),
+        border=ft.border.only(bottom=ft.border.BorderSide(1, BORDER)),
+    )
+
+    switcher = ft.AnimatedSwitcher(
+        content=tab_assignments_view,
+        transition=ft.AnimatedSwitcherTransition.FADE,
+        duration=200,
+    )
+
+    # ── ROOT LAYOUT ───────────────────────────────────────────────────────────
+    page.add(
+        ft.Column(
+            controls=[
+                header,
+                course_panel,
+                tab_bar,
+                ft.Container(
+                    content=switcher,
+                    padding=ft.padding.symmetric(horizontal=20, vertical=10),
+                    expand=True,
+                ),
+            ],
+            spacing=0,
             expand=True,
+            scroll=ft.ScrollMode.HIDDEN,
         )
     )
+
+    # subtle star-field background shimmer via page overlay (cosmetic)
+    page.overlay.append(
+        ft.Container(
+            width=page.window.width,
+            height=4,
+            top=0,
+            gradient=ft.LinearGradient(
+                begin=ft.Alignment(-1, 0),
+                end=ft.Alignment(1, 0),
+                colors=[BG, RED_DIM, BG],
+            ),
+        )
+    )
+    page.update()
 
 
 ft.app(target=main)
