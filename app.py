@@ -143,16 +143,14 @@ def main(page: ft.Page):
     page.window.resizable = True
 
     # ── state ─────────────────────────────────────────────────────────────────
-    assignments: dict = {}
-    current_course_id = {"v": ""}
-    chat_messages: list[ft.Control] = []
+    # all_assignments is now a flat dict {name: desc} merged from all courses
+    all_assignments: dict = {}
 
     # ── refs ──────────────────────────────────────────────────────────────────
-    course_input   = ft.Ref[ft.TextField]()
-    chat_column    = ft.Ref[ft.Column]()
-    assignments_col= ft.Ref[ft.Column]()
-    status_text    = ft.Ref[ft.Text]()
-    load_btn       = ft.Ref[ft.IconButton]()
+    chat_column     = ft.Ref[ft.Column]()
+    assignments_col = ft.Ref[ft.Column]()
+    status_text     = ft.Ref[ft.Text]()
+    load_btn        = ft.Ref[ft.ElevatedButton]()
 
     # ── chat helpers ──────────────────────────────────────────────────────────
     def bubble(text: str, is_bot: bool) -> ft.Container:
@@ -179,30 +177,44 @@ def main(page: ft.Page):
 
     # ── load assignments ──────────────────────────────────────────────────────
     def load_assignments(e):
-        cid = course_input.current.value.strip()
-        if not cid:
-            status_text.current.value = "⚠  Ingresa un Course ID"
-            status_text.current.color = RED
-            page.update()
-            return
-
         load_btn.current.disabled = True
         status_text.current.value = "Conectando con Canvas…"
         status_text.current.color = MUTED
         page.update()
-        current_course_id["v"] = cid
 
         def _fetch():
-            nonlocal assignments
+            nonlocal all_assignments
             try:
-                assignments = canvas_student.getAssignmentInfo(cid)
+                # getAllWeekAssignments returns a list of dicts [{name: desc}, ...]
+                courses_data = canvas_student.getAllWeekAssignments()
+
+                # Flatten all courses into a single dict
+                all_assignments = {}
+                for course_dict in courses_data:
+                    all_assignments.update(course_dict)
+
                 assignments_col.current.controls.clear()
-                for name, desc in assignments.items():
+
+                if all_assignments:
+                    for name, desc in all_assignments.items():
+                        assignments_col.current.controls.append(
+                            assignment_card(name, desc)
+                        )
+                    status_text.current.value = f"✓  {len(all_assignments)} tareas pendientes"
+                    status_text.current.color = "#4caf87"
+                else:
                     assignments_col.current.controls.append(
-                        assignment_card(name, desc)
+                        ft.Container(
+                            content=ft.Text("¡Sin tareas esta semana! 🎉",
+                                            size=12, color=MUTED,
+                                            text_align=ft.TextAlign.CENTER),
+                            alignment=ft.Alignment(0, 0),
+                            padding=30,
+                        )
                     )
-                status_text.current.value = f"✓  {len(assignments)} tareas pendientes"
-                status_text.current.color = "#4caf87"
+                    status_text.current.value = "Sin tareas pendientes"
+                    status_text.current.color = "#4caf87"
+
             except Exception as ex:
                 status_text.current.value = f"Error: {ex}"
                 status_text.current.color = RED
@@ -214,14 +226,13 @@ def main(page: ft.Page):
 
     # ── ask AI ────────────────────────────────────────────────────────────────
     def ask_ai(e):
-        if not assignments:
-            add_bubble("⚠  Primero carga un curso.", True)
+        if not all_assignments:
+            add_bubble("⚠  Primero carga tus tareas.", True)
             return
 
         add_bubble("Analiza mis tareas y dame un resumen.", False)
 
         def _run():
-            # show typing dots while connecting
             dots = ft.Container(
                 content=ft.Row(
                     [ft.Container(width=6, height=6, border_radius=3, bgcolor=RED)
@@ -237,9 +248,9 @@ def main(page: ft.Page):
             page.update()
 
             try:
-                stream = groq_bot.startChatBot(current_course_id["v"])
+                # startChatBot() fetches all courses internally — no args needed
+                stream = groq_bot.startChatBot()
 
-                # remove dots and create a live streaming bubble
                 chat_column.current.controls.remove(dots)
                 live_text = ft.Text("", size=12, color=TEXT, selectable=True)
                 live_bubble = ft.Container(
@@ -256,7 +267,6 @@ def main(page: ft.Page):
                 chat_column.current.controls.append(live_bubble)
                 page.update()
 
-                # stream chunks into the bubble in real-time
                 full_text = ""
                 for chunk in stream:
                     content = chunk.choices[0].delta.content
@@ -266,7 +276,8 @@ def main(page: ft.Page):
                         page.update()
 
             except Exception as ex:
-                chat_column.current.controls.remove(dots) if dots in chat_column.current.controls else None
+                if dots in chat_column.current.controls:
+                    chat_column.current.controls.remove(dots)
                 add_bubble(f"❌ Error al conectar con Groq: {ex}", True)
 
         threading.Thread(target=_run, daemon=True).start()
@@ -328,45 +339,28 @@ def main(page: ft.Page):
         ),
     )
 
-    # ── COURSE PANEL ──────────────────────────────────────────────────────────
-    course_panel = ft.Container(
+    # ── LOAD PANEL (button only, no text field) ───────────────────────────────
+    load_panel = ft.Container(
         content=ft.Column(
             controls=[
-                ft.Text("CURSO", size=10, weight=ft.FontWeight.W_900,
-                        color=MUTED, style=ft.TextStyle(letter_spacing=3)),
-                ft.Container(
-                    content=ft.Row(
-                        controls=[
-                            ft.TextField(
-                                ref=course_input,
-                                hint_text="Course ID  (ej. 55069)",
-                                hint_style=ft.TextStyle(color=MUTED, size=12),
-                                text_style=ft.TextStyle(color=TEXT, size=13,
-                                                        font_family="DM Mono"),
-                                border=ft.InputBorder.NONE,
-                                expand=True,
-                                bgcolor="transparent",
-                                cursor_color=RED,
-                                on_submit=load_assignments,
-                            ),
-                            ft.IconButton(
-                                ref=load_btn,
-                                icon=ft.Icons.DOWNLOAD_ROUNDED,
-                                icon_color=RED,
-                                icon_size=20,
-                                tooltip="Cargar tareas",
-                                on_click=load_assignments,
-                            ),
-                        ],
+                ft.ElevatedButton(
+                     "Cargar mis tareas",
+                    ref=load_btn,
+                    icon=ft.Icons.DOWNLOAD_ROUNDED,
+                    on_click=load_assignments,
+                    style=ft.ButtonStyle(
+                        color=TEXT,
+                        bgcolor={"": CARD, "hovered": RED_DIM},
+                        side=ft.BorderSide(1, BORDER),
+                        shape=ft.RoundedRectangleBorder(radius=10),
+                        padding=ft.padding.symmetric(horizontal=20, vertical=14),
                     ),
-                    bgcolor=CARD,
-                    border=ft.border.all(1, BORDER),
-                    border_radius=10,
-                    padding=ft.padding.only(left=14, right=4, top=4, bottom=4),
+                    expand=True,
                 ),
                 ft.Text(ref=status_text, value="", size=11, color=MUTED),
             ],
             spacing=8,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         ),
         padding=ft.padding.symmetric(horizontal=20, vertical=10),
     )
@@ -378,7 +372,7 @@ def main(page: ft.Page):
         ref=assignments_col,
         controls=[
             ft.Container(
-                content=ft.Text("Carga un curso para ver las tareas.",
+                content=ft.Text("Presiona \"Cargar mis tareas\" para ver las tareas.",
                                 size=12, color=MUTED,
                                 text_align=ft.TextAlign.CENTER),
                 alignment=ft.Alignment(0, 0),
@@ -397,8 +391,8 @@ def main(page: ft.Page):
                     controls=[
                         ft.Container(
                             content=ft.Text(
-                                "Hola 👋  Carga un curso y presiona\n"
-                                "\"Resumir\" para analizar tus tareas.",
+                                "Hola 👋  Carga tus tareas y presiona\n"
+                                "\"Resumir\" para analizarlas.",
                                 size=12, color=MUTED,
                                 text_align=ft.TextAlign.CENTER,
                             ),
@@ -495,7 +489,7 @@ def main(page: ft.Page):
         ft.Column(
             controls=[
                 header,
-                course_panel,
+                load_panel,
                 tab_bar,
                 ft.Container(
                     content=switcher,

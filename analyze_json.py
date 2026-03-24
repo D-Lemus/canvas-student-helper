@@ -24,9 +24,8 @@ def obtainCourses():
     for course in response.json():
         if "name" not in course:
             continue
-        if "P2026" not in course["name"]:
-            continue
-        #print(course["id"], course["name"])
+        if "P2026" in course["name"]:
+            print(course["id"])
 
 #course_id = "55069"
 def getAssignmentsJson(course_id:str):
@@ -50,7 +49,7 @@ def getAssignmentsJson(course_id:str):
                 print(json.dumps(assignment, indent=2))
                 
                 
-a = getAssignmentsJson("55069")
+a = obtainCourses()
 
 
 

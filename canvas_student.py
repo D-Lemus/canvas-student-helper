@@ -7,6 +7,7 @@ from groq import Groq
 from dotenv import load_dotenv
 import time
 
+
 load_dotenv()
 
 CANVAS_URL = os.getenv("CANVAS_URL")
@@ -14,6 +15,7 @@ CANVAS_API_TOKEN = os.getenv("CANVAS_API_TOKEN")
 client = Groq(api_key=os.getenv("GROQ_API_TOKEN"))
 
 def obtainCourses():
+    courses = []
     response = requests.get(
         f"{CANVAS_URL}api/v1/courses",
         headers={"Authorization": f"Bearer {CANVAS_API_TOKEN}"},
@@ -25,10 +27,10 @@ def obtainCourses():
     for course in response.json():
         if "name" not in course:
             continue
-        if "P2026" not in course["name"]:
-            continue
-        #print(course["id"], course["name"])
+        if "P2026" in course["name"]:
+            courses.append(int(course["id"]))
 
+    return courses
 #course_id = "55069"
 
 
@@ -45,18 +47,22 @@ def _getDueAssignments(course_id : str):
     
     assignments = _getAssignmentsFromACourse(course_id)
     now = datetime.now(timezone.utc)
+    week_from_now = now + pd.Timedelta(days=7)
     due_assignments = []
 
     for assignment in assignments:
-        due_date = assignment["due_at"]
-        if due_date:
-            due_at = datetime.fromisoformat(due_date.replace("Z", "+00:00"))
-            if assignment["has_submitted_submissions"]==False and due_at > now:
+        due_at_str = assignment["due_at"]
+        if not due_at_str:
+            continue
+        due_at= datetime.fromisoformat(due_at_str.replace("Z", "+00:00"))
+        if (not assignment.get("has_submitted_submissions", False) and 
+                due_at >= now and                    # not overdue
+                due_at <= week_from_now):            # within next 7 days
                 due_assignments.append(assignment)
 
     return due_assignments
 
-def getAssignmentInfo(course_id : str):
+def _getAssignmentInfo(course_id : str):
     assignments_due= _getDueAssignments(course_id)
 
     name_and_description = {}
@@ -69,6 +75,19 @@ def getAssignmentInfo(course_id : str):
                 
     return name_and_description
 
+
+def getAllWeekAssignments():
+    courses = obtainCourses()
+    assignments = []
+
+    for course in courses:
+        assignments.append(_getAssignmentInfo(course))
+
+    print(list(assignments))
+    print(json.dumps(assignments, indent=2))
+    return assignments
+    
+a = getAllWeekAssignments()
 
 
 

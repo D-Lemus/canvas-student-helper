@@ -25,15 +25,18 @@ def responseAnimation(response):
     print() 
 
 
-def startChatBot(course_id : str):
-    assignments_due = canvas_student.getAssignmentInfo(course_id)
+def startChatBot():
+    assignments_due = canvas_student.getAllWeekAssignments()
 
     stream = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
             {"role": "user", 
             "content": 
-            f"analyze my following assignments and make a brief summary of them:{assignments_due}"}
+            f"""analyze my following assignments and do me an assignment 
+            backlog based on a proprity stategy take into account 
+            the following assignments:
+            {assignments_due}"""}
         ], stream=True
     )
 
