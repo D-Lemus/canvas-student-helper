@@ -249,7 +249,7 @@ def main(page: ft.Page):
 
             try:
                 # startChatBot() fetches all courses internally — no args needed
-                stream = groq_bot.startChatBot()
+                result = groq_bot.startChatBot()
 
                 chat_column.current.controls.remove(dots)
                 live_text = ft.Text("", size=12, color=TEXT, selectable=True)
@@ -265,15 +265,10 @@ def main(page: ft.Page):
                     margin=ft.margin.only(right=50, bottom=6),
                 )
                 chat_column.current.controls.append(live_bubble)
+                add_bubble(result,True)
                 page.update()
 
-                full_text = ""
-                for chunk in stream:
-                    content = chunk.choices[0].delta.content
-                    if content:
-                        full_text += content
-                        live_text.value = full_text
-                        page.update()
+                       
 
             except Exception as ex:
                 if dots in chat_column.current.controls:
