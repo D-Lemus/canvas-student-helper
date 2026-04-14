@@ -1,10 +1,8 @@
 import requests
 import json
 from datetime import datetime, timezone
-import pandas as pd
 import os
 from dotenv import load_dotenv
-import time
 
 load_dotenv()
 
@@ -38,14 +36,13 @@ def getAssignmentsJson(course_id:str):
     #print(json.dumps(response2.json(), indent=2))
     now = datetime.now(timezone.utc)
 
-    assignments_due = []
     for assignment in response2.json():
         if assignment["due_at"]:
 
             due_at_str = assignment["due_at"] 
             due_at = datetime.fromisoformat(due_at_str.replace("Z", "+00:00"))
 
-            if assignment["has_submitted_submissions"]==False and due_at > now:
+            if not assignment["has_submitted_submissions"] and due_at > now:
                 print(json.dumps(assignment, indent=2))
                 
                 

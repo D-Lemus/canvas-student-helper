@@ -5,7 +5,6 @@ import pandas as pd
 import os
 from groq import Groq
 from dotenv import load_dotenv
-import time
 
 
 load_dotenv()
@@ -14,7 +13,7 @@ CANVAS_URL = os.getenv("CANVAS_URL")
 CANVAS_API_TOKEN = os.getenv("CANVAS_API_TOKEN")
 client = Groq(api_key=os.getenv("GROQ_API_TOKEN"))
 
-def obtainCourses():
+def obtain_courses():
     courses = []
     response = requests.get(
         f"{CANVAS_URL}api/v1/courses",
@@ -31,10 +30,10 @@ def obtainCourses():
             courses.append(int(course["id"]))
 
     return courses
-#course_id = "55069"
 
 
-def _getAssignmentsFromACourse(course_id : str):
+
+def _get_assignments_from_a_course(course_id : str):
     response = requests.get(
         f"{CANVAS_URL}api/v1/courses/{course_id}/assignments",
         headers={"Authorization": f"Bearer {CANVAS_API_TOKEN}"},
@@ -43,9 +42,9 @@ def _getAssignmentsFromACourse(course_id : str):
 
     return response.json()
 
-def _getDueAssignments(course_id : str):
+def get_due_assignments(course_id : str):
     
-    assignments = _getAssignmentsFromACourse(course_id)
+    assignments = _get_assignments_from_a_course(course_id)
     now = datetime.now(timezone.utc)
     week_from_now = now + pd.Timedelta(days=7)
     due_assignments = []
@@ -62,8 +61,8 @@ def _getDueAssignments(course_id : str):
 
     return due_assignments
 
-def _getAssignmentInfo(course_id : str):
-    assignments_due= _getDueAssignments(course_id)
+def _get_assignments_info(course_id : str):
+    assignments_due= get_due_assignments(course_id)
 
     name_and_description = {}
 
@@ -76,18 +75,18 @@ def _getAssignmentInfo(course_id : str):
     return name_and_description
 
 
-def getAllWeekAssignments():
-    courses = obtainCourses()
+def get_all_week_assignments():
+    courses = obtain_courses()
     assignments = []
 
     for course in courses:
-        assignments.append(_getAssignmentInfo(course))
+        assignments.append(_get_assignments_info(course))
 
     print(list(assignments))
     print(json.dumps(assignments, indent=2))
     return assignments
     
-a = getAllWeekAssignments()
+a = get_all_week_assignments()
 
 
 

@@ -185,8 +185,8 @@ def main(page: ft.Page):
         def _fetch():
             nonlocal all_assignments
             try:
-                # getAllWeekAssignments returns a list of dicts [{name: desc}, ...]
-                courses_data = canvas_student.getAllWeekAssignments()
+                # get_all_week_assignments returns a list of dicts [{name: desc}, ...]
+                courses_data = canvas_student.get_all_week_assignments()
 
                 # Flatten all courses into a single dict
                 all_assignments = {}
@@ -248,8 +248,8 @@ def main(page: ft.Page):
             page.update()
 
             try:
-                # startChatBot() fetches all courses internally — no args needed
-                result = groq_bot.startChatBot()
+                # start_chat_bot() fetches all courses internally — no args needed
+                result = groq_bot.start_chat_bot()
 
                 chat_column.current.controls.remove(dots)
                 live_text = ft.Text("", size=12, color=TEXT, selectable=True)

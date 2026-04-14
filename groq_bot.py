@@ -1,11 +1,6 @@
-import requests
-import json
-from datetime import datetime, timezone
-import pandas as pd
 import os
 from groq import Groq
 from dotenv import load_dotenv
-import time
 import canvas_student
 
 # PARA DESPUES:
@@ -15,8 +10,8 @@ load_dotenv()
 client = Groq(api_key=os.getenv("GROQ_API_TOKEN"))
 
 
-def startChatBot():
-    assignments_due = canvas_student.getAllWeekAssignments()
+def start_chat_bot():
+    assignments_due = canvas_student.get_all_week_assignments()
 
     result = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
